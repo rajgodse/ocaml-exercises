@@ -2,8 +2,8 @@
  * This file contains all exercises related to list operations
  * All functions are implemented tail recursively
  *)
- 
- type 'a node = One of 'a | Many of 'a node list
+
+type 'a node = One of 'a | Many of 'a node list
 type 'a rle = Uno of 'a | Muchos of int * 'a
 
 let replicate_exception =
@@ -140,4 +140,67 @@ let rec takel_helper acc xs = function
 
 let takel xs n = rev (takel_helper [] xs n)
 
-let slice xs i j = if i < 0 || j < i then raise index_exception else takel (dropl xs i) (j - i + 1)
+let slice xs i j =
+  if i < 0 || j < i then raise index_exception
+  else takel (dropl xs i) (j - i + 1)
+
+let rec append_helper acc = function
+  | [] -> acc
+  | x :: xs -> append_helper (x :: acc) xs
+
+let append xs ys =
+  let rxs = rev xs in
+  rev (append_helper rxs ys)
+
+let modulo x y =
+  let r = x mod y in
+  if r < 0 then r + y else r
+
+let rotate xs i =
+  let n = length xs in
+  if n = 0 then []
+  else
+    let i' = modulo i n in
+    let ys, zs = split xs i' in
+    append zs ys
+
+let remove_at i xs =
+  let ys, zs = split xs i in
+  match zs with [] -> raise index_exception | _ :: zs' -> append ys zs'
+
+let insert_at x i xs =
+  let ys, zs = split xs i in
+  append ys (x :: zs)
+
+let rec range_helper acc x y =
+  if y < x then acc else range_helper (y :: acc) x (y - 1)
+
+let range x y = if x > y then rev (range_helper [] y x) else range_helper [] x y
+
+let rec unwind acc i = function
+  | [] -> raise index_exception
+  | y :: ys -> if i = 0 then (acc, y, ys) else unwind (y :: acc) (i - 1) ys
+
+let rec rewind (ys, zs) =
+  match ys with [] -> zs | y :: ys' -> rewind (ys', y :: zs)
+
+let replace_at x i xs =
+  if i < 0 then raise index_exception
+  else match unwind [] i xs with acc, _, ys -> rewind (acc, x :: ys)
+
+(* The proof that this meets the spec is left as an exercise *)
+let rand_select xs n =
+  let rec helper acc total = function
+    | [] -> acc
+    | y :: ys ->
+        let total' = total + 1 in
+        let r = Random.full_int total' in
+        let acc' = if r < n then replace_at y r acc else acc in
+        helper acc' total' ys
+  in
+  match unwind [] n xs with acc, y, ys -> helper (y :: acc) n ys
+
+(* Play around with this in the top level to see real randomness at work *)
+let true_rand_select xs n =
+  let _ = Random.self_init () in
+  rand_select xs n
