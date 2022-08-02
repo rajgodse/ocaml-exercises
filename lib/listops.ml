@@ -65,13 +65,16 @@ let rec pack_helper acc curr last = function
 
 let pack = function [] -> [] | x :: xs -> rev (pack_helper [] [] x xs)
 
-let rec encode_helper acc cnt curr = function
-  | [] -> (cnt, curr) :: acc
-  | x :: xs ->
-      if x = curr then encode_helper acc (cnt + 1) curr xs
-      else encode_helper ((cnt, curr) :: acc) 1 x xs
+let encode_generic equals update init return =
+  let rec helper acc cnt curr = function
+    | [] -> (cnt, return curr) :: acc
+    | x :: xs ->
+        if equals x curr then helper acc (cnt + 1) (update curr x) xs
+        else helper ((cnt, return curr) :: acc) 1 (init x) xs
+  in
+  function [] -> [] | x :: xs -> rev (helper [] 1 (init x) xs)
 
-let encode = function [] -> [] | x :: xs -> rev (encode_helper [] 1 x xs)
+let encode xs = encode_generic ( = ) (fun _ x -> x) Fun.id Fun.id xs
 let run_to_rle cnt curr = if cnt = 1 then Uno curr else Muchos (cnt, curr)
 
 let rec modified_encode_helper acc cnt curr = function
@@ -177,19 +180,24 @@ let rec range_helper acc x y =
 
 let range x y = if x > y then rev (range_helper [] y x) else range_helper [] x y
 
-let rec unwind acc i = function
-  | [] -> raise index_exception
-  | y :: ys -> if i = 0 then (acc, y, ys) else unwind (y :: acc) (i - 1) ys
+let rec unwind acc i xs =
+  match (i, xs) with
+  | 0, _ -> (acc, xs)
+  | _, [] -> raise index_exception
+  | i, y :: ys -> unwind (y :: acc) (i - 1) ys
 
 let rec rewind (ys, zs) =
   match ys with [] -> zs | y :: ys' -> rewind (ys', y :: zs)
 
 let replace_at x i xs =
   if i < 0 then raise index_exception
-  else match unwind [] i xs with acc, _, ys -> rewind (acc, x :: ys)
+  else
+    match unwind [] i xs with
+    | _, [] -> raise index_exception
+    | acc, _ :: ys -> rewind (acc, x :: ys)
 
 (* The proof that this meets the spec is left as an exercise *)
-let rand_select xs n =
+let rand_select_impl xs n =
   let rec helper acc total = function
     | [] -> acc
     | y :: ys ->
@@ -198,9 +206,104 @@ let rand_select xs n =
         let acc' = if r < n then replace_at y r acc else acc in
         helper acc' total' ys
   in
-  match unwind [] n xs with acc, y, ys -> helper (y :: acc) n ys
+  match unwind [] n xs with acc, ys -> helper acc n ys
 
-(* Play around with this in the top level to see real randomness at work *)
-let true_rand_select xs n =
-  let _ = Random.self_init () in
-  rand_select xs n
+let lotto_select_impl n m =
+  if m <= 0 || n < 0 || n > m then raise index_exception
+  else rand_select_impl (range 1 m) n
+
+let poll_random first remaining =
+  let rec helper selected rest total = function
+    | [] -> (selected, rest)
+    | y :: ys ->
+        let total' = total + 1 in
+        if Random.full_int total' = 0 then helper y (selected :: rest) total' ys
+        else helper selected (y :: rest) total' ys
+  in
+  helper first [] 1 remaining
+
+let permutation_impl xs =
+  let rec helper acc = function
+    | [] -> acc
+    | y :: ys -> ( match poll_random y ys with z, zs -> helper (z :: acc) zs)
+  in
+  helper [] xs
+
+(* let true_rand f = *)
+(* let _ = Random.self_init () in *)
+(* f () *)
+
+let test_rand f =
+  let _ = Random.init 15251 in
+  f ()
+
+let rand_select xs n = test_rand (fun _ -> rand_select_impl xs n)
+let lotto_select n m = test_rand (fun _ -> lotto_select_impl n m)
+let permutation xs = test_rand (fun _ -> permutation_impl xs)
+
+(* This implementation uses Continuation Passing Style *)
+let extract n xs =
+  let rec helper k acc curr xs = function
+    | 0 -> k (curr :: acc)
+    | i -> (
+        match xs with
+        | [] -> k acc
+        | y :: ys ->
+            let k' acc' = helper k acc' (y :: curr) ys (i - 1) in
+            helper k' acc curr ys i)
+  in
+  if n < 0 then raise index_exception
+  else if n = 0 then [ [] ]
+  else helper Fun.id [] [] xs n
+
+let extract_with_residue n xs =
+  let rec helper k acc curr rest xs = function
+    | 0 -> k ((curr, rewind (rest, xs)) :: acc)
+    | i -> (
+        match xs with
+        | [] -> k acc
+        | y :: ys ->
+            let k' acc' = helper k acc' (y :: curr) ys rest (i - 1) in
+            helper k' acc curr (y :: rest) ys i)
+  in
+  if n < 0 then raise index_exception
+  else if n = 0 then [ ([], xs) ]
+  else helper Fun.id [] [] [] xs n
+
+let group xs sizes =
+  let combine groups combos =
+    List.map (fun (chosen, unchosen) -> (unchosen, chosen :: groups)) combos
+  in
+  let expand size (rest, groups) =
+    extract_with_residue size rest |> combine groups
+  in
+  List.fold_left
+    (fun partials size -> List.map (expand size) partials |> List.flatten)
+    [ (xs, []) ]
+    sizes
+  |> List.map (fun (_, groups) -> rev groups)
+
+let insert cmp x =
+  let rec helper acc = function
+    | [] -> rewind (acc, [ x ])
+    | y :: ys ->
+        if cmp x y < 0 then rewind (acc, x :: y :: ys) else helper (y :: acc) ys
+  in
+  helper []
+
+let sort cmp = List.fold_left (fun xs x -> insert cmp x xs) []
+let length_sort xs = sort (fun xs ys -> length xs - length ys) xs
+
+let encode_length xs =
+  encode_generic
+    (fun ps qs ->
+      match qs with [] -> false | rs :: _ -> length ps = length rs)
+    (fun acc x -> x :: acc)
+    (fun x -> [ x ])
+    rev xs
+
+let frequency_sort xs =
+  length_sort xs |> encode_length
+  |> sort (fun (n, _) (m, _) -> n - m)
+  |> List.map (fun (_, xs) -> xs)
+  |> List.flatten
